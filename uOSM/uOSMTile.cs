@@ -53,9 +53,19 @@ namespace uOSM
             return string.Format(CultureInfo.InvariantCulture, "{0}\\{1}_{2}.png", tile.Z, tile.X, tile.Y);
         }
 
+        public static string GetRelativePathAndFileName(int zoom, int x, int y)
+        {
+            return string.Format(CultureInfo.InvariantCulture, "{0}\\{1}_{2}.png", zoom, x, y);
+        }
+
         public static string GetRelativeUrl(uOSMTile tile)
         {
             return string.Format(CultureInfo.InvariantCulture, "{0}/{1}/{2}.png", tile.Z, tile.X, tile.Y);
+        }
+
+        public static string GetRelativeUrl(int zoom, int x, int y)
+        {
+            return string.Format(CultureInfo.InvariantCulture, "{0}/{1}/{2}.png", zoom, x, y);
         }
 
         #endregion

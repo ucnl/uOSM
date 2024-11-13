@@ -6,10 +6,25 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace uOSM
 {
+
+    public class RTArgs : EventArgs
+    {
+        public int TileNumber { get; private set; }
+        public int TilesTotal { get; private set; }
+
+        public RTArgs(int tile, int from)
+        {
+            TileNumber = tile;
+            TilesTotal = from;
+        }
+    }
+
     public class TilesReadyEventArgs : EventArgs
     {
         #region Properties
@@ -48,6 +63,8 @@ namespace uOSM
 
         public int MaxZoom { get; private set; }
 
+        public bool DownloadingEnabled { get; set; }
+
         string[] servers;
 
         Image errImage;
@@ -55,14 +72,18 @@ namespace uOSM
 
         HttpClient httpClient;
 
+        Random rnd;
+
         #endregion
 
         #region Constructor
 
-        public uOSMTileProvider(int maxTiles, int maxZoom, Size tileSize, string database_folder, string[] servers_names)
+        public uOSMTileProvider(int maxTiles, int maxZoom, Size tileSize, string database_folder, string[] servers_names) 
         {            
             if ((maxTiles < 0) && (maxTiles > 1024))
                 throw new ArgumentOutOfRangeException("maxTiles should be in a range from 1 to 1024");
+
+            rnd = new Random();
 
             MaxZoom = maxZoom;
 
@@ -85,9 +106,48 @@ namespace uOSM
                    | SecurityProtocolType.Ssl3;
 
             httpClient = new HttpClient();
-            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("uOSM Tile Provider");
+            
+            var mStringSize = rnd.Next(8, 24);
+            var mStringBytes = new byte[mStringSize];
+            rnd.NextBytes(mStringBytes);
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < mStringSize; i++)
+                sb.Append(mStringBytes[i].ToString("X2"));
+
+            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(sb.ToString());
+        }        
+
+        public uOSMTileProvider(int maxTiles, int maxZoom, Size tileSize, string database_folder, string[] servers_names, string customHNames)
+        {
+            if ((maxTiles < 0) && (maxTiles > 1024))
+                throw new ArgumentOutOfRangeException("maxTiles should be in a range from 1 to 1024");
+
+            rnd = new Random();
+
+            MaxZoom = maxZoom;
+
+            MaxMemTiles = maxTiles;
+
+            TileSize = tileSize;
+            errImage = new Bitmap(tileSize.Width, tileSize.Height);
+
+            DB_Path = database_folder;
+
+            servers = new string[servers_names.Length];
+            Array.Copy(servers_names, servers, servers_names.Length);
+
+            memTiles = new Dictionary<string, uOSMTile>();
+
+            ServicePointManager.Expect100Continue = true;
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls
+                   | SecurityProtocolType.Tls11
+                   | SecurityProtocolType.Tls12
+                   | SecurityProtocolType.Ssl3;
+
+            httpClient = new HttpClient();            
+            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(customHNames);
         }
-        
+
         #endregion
 
         #region Methods
@@ -161,7 +221,7 @@ namespace uOSM
         private bool TryDownloadTileImage(uOSMTile tile, out Image tileImage)
         {
             bool result = false;            
-            string url = string.Format(CultureInfo.InvariantCulture, "{0}/{1}", GetNextServer(), uOSMTile.GetRelativeUrl(tile));
+            string url = string.Format(CultureInfo.InvariantCulture, "{0}/{1}", GetNextServer(), uOSMTile.GetRelativeUrl(tile));            
 
             tileImage = null;
             byte[] bytes = null;
@@ -181,6 +241,21 @@ namespace uOSM
             }
 
             return result;
+        }
+
+
+        private bool IsTileStored(uOSMTile tile)
+        {
+            string tilePath = Path.Combine(DB_Path, uOSMTile.GetRelativePathAndFileName(tile));
+            return File.Exists(tilePath);
+        }
+
+        private bool IsTileStored(int zoom, int x, int y)
+        {
+            string tilePath = Path.Combine(DB_Path, uOSMTile.GetRelativePathAndFileName(zoom, x, y));
+
+            return File.Exists(tilePath);
+            
         }
 
         #endregion
@@ -215,8 +290,9 @@ namespace uOSM
                         {
                             SetTileToMemory(tile);
                         }
-                        else
+                        else if (DownloadingEnabled)
                         {
+                            Thread.Sleep(rnd.Next(500));
                             if (TryDownloadTileImage(tile, out tile.Tile))
                             {
                                 SetTileToMemory(tile);
@@ -227,6 +303,10 @@ namespace uOSM
                                 tile.Tile = (Bitmap)errImage.Clone();
                             }
                         }
+                        else
+                        {
+                            tile.Tile = (Bitmap)errImage.Clone();
+                        }
                     }
 
                     result.Add(tile);
@@ -236,14 +316,54 @@ namespace uOSM
             return result;
         }
 
-        #endregion
 
+
+        public bool AbortSaveTilesRecursive = false;
+
+        public void SaveTilesRecursive(double lat_deg, double lon_deg, int zoomout, int zoomin, int delay_ms, bool randomize)
+        {
+            var tileIDs = uOSMTileUtils.GetTilesRecursive(lat_deg, lon_deg, zoomout, zoomin);
+
+            if (randomize)
+            {
+                Random rnd = new Random();
+                for (int i = tileIDs.Count - 1; i > 0; i--)
+                {
+                    int sIndex = rnd.Next(i + 1);
+                    var tmp = tileIDs[i];
+                    tileIDs[i] = tileIDs[sIndex];
+                    tileIDs[sIndex] = tmp;
+                }
+            }
+
+            for (int i = 0; (i < tileIDs.Count) && (!AbortSaveTilesRecursive); i++)
+            {
+                uOSMTile tile = new uOSMTile(tileIDs[i][0], tileIDs[i][1], tileIDs[i][2]);
+
+                if (!IsTileStored(tile))
+                {
+                    if (TryDownloadTileImage(tile, out tile.Tile))
+                    {
+                        TrySaveTile(tile);
+                        Thread.Sleep(delay_ms);
+                    }
+                }
+
+                var tHandler = GotTileEventHandler;
+                if (tHandler != null)
+                    tHandler(this, new RTArgs(i + 1, tileIDs.Count));
+            }
+        }
+
+        #endregion
 
         #endregion
 
         #region Events
 
         public EventHandler<TilesReadyEventArgs> TilesReadyEventHandler;
+
+        public EventHandler<RTArgs> GotTileEventHandler;
 
         #endregion
 

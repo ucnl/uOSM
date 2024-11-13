@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using UCNLNav;
 
 namespace uOSM
@@ -159,7 +160,86 @@ namespace uOSM
             c_lat_deg = (lu_lat + rb_lat) / 2.0;
             c_lon_deg = (lu_lon + rb_lon) / 2.0;
         }
-        
+
+        public static void GetTiles(int viewPortWidth_px, int viewPortHeight_px,
+            int twidth_px, int theight_px,
+            double desired_center_lat_deg, double desired_center_lon_deg, int zoom,
+            out int lu_x, out int lu_y, out int rb_x, out int rb_y,
+            out double actual_center_lat_deg, out double actual_center_lon_deg,
+            out double x_offset_px, out double y_offset_px)
+        {
+            int c_tile_x = Lon2TileX(desired_center_lon_deg, zoom);
+            int c_tile_y = Lat2TileY(desired_center_lat_deg, zoom);
+
+            lu_x = c_tile_x;
+            lu_y = c_tile_y;
+            rb_x = c_tile_x;
+            rb_y = c_tile_y;
+
+            int tlu, trb;
+            bool finish = false;
+
+            while ((Math.Abs(lu_x - rb_x) * twidth_px <= viewPortWidth_px + twidth_px) && !finish)
+            {
+                tlu = ScrollTileCoordinate(lu_x, zoom, -1);
+                trb = ScrollTileCoordinate(rb_x, zoom, 1);
+                finish = (tlu == lu_x) || (trb == rb_x);
+                lu_x = tlu;
+                rb_x = trb;
+            }
+
+            finish = false;
+
+            while ((Math.Abs(lu_y - rb_y) * theight_px <= viewPortHeight_px + theight_px) && !finish)
+            {
+                tlu = ScrollTileCoordinate(lu_y, zoom, -1);
+                trb = ScrollTileCoordinate(rb_y, zoom, 1);
+                finish = (tlu == lu_y) || (trb == rb_y);
+                lu_y = tlu;
+                rb_y = trb;
+            }
+
+            double ctlat_lu = TileY2Lat(c_tile_y, zoom);
+            double ctlon_lu = TileX2Lon(c_tile_x, zoom);
+            double ctlat_rb = TileY2Lat(ScrollTileCoordinate(c_tile_y, zoom, 1), zoom);
+            double ctlon_rb = TileX2Lon(ScrollTileCoordinate(c_tile_x, zoom, 1), zoom);
+
+            actual_center_lat_deg = (ctlat_lu + ctlat_rb) / 2.0;
+            actual_center_lon_deg = (ctlon_lu + ctlon_rb) / 2.0;
+
+            //x_offset_px = twidth_px * (desired_center_lon_deg - actual_center_lon_deg) / (ctlon_lu - ctlon_rb);
+            //y_offset_px = theight_px * (desired_center_lat_deg - actual_center_lat_deg) / (ctlat_lu - ctlat_rb);
+
+            x_offset_px = (desired_center_lon_deg - ctlon_lu) * twidth_px / (ctlon_rb - ctlon_lu);
+            y_offset_px = (desired_center_lat_deg - ctlat_lu) * theight_px / (ctlat_lu - ctlat_rb);
+        }       
+
+        public static List<int[]> GetTilesRecursive(double center_lat_deg, double center_lon_deg, int zoomout, int zoomin)
+        {
+            int c_tile_x = Lon2TileX(center_lon_deg, zoomout);
+            int c_tile_y = Lat2TileY(center_lat_deg, zoomout);            
+            
+            return GetTilesRecursive(c_tile_x, c_tile_y, zoomout, zoomin);              
+        }
+
+        public static List<int[]> GetTilesRecursive(int x, int y, int zoomout, int zoomin)
+        {            
+            List<int[]> result = new List<int[]>();
+
+            result.Add(new int[] { zoomout, x, y });
+
+            if (zoomout < zoomin)
+            {
+                int nextz = zoomout + 1;
+                result.AddRange(GetTilesRecursive(2 * x, 2 * y, nextz, zoomin));
+                result.AddRange(GetTilesRecursive(2 * x + 1, 2 * y, nextz, zoomin));
+                result.AddRange(GetTilesRecursive(2 * x, 2 * y + 1, nextz, zoomin));
+                result.AddRange(GetTilesRecursive(2 * x + 1, 2 * y + 1, nextz, zoomin));
+            }
+
+            return result;
+        }
+
         #endregion
     }
 }
